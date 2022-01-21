@@ -1,4 +1,4 @@
-# tcfw
+# tcfw-example
 
 ## Prerequisites
 
