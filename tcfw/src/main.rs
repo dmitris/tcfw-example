@@ -1,9 +1,9 @@
-use aya::{Bpf, include_bytes_aligned};
-use aya::programs::{tc, SchedClassifier, TcAttachType};
+use aya::programs::{tc, tc::qdisc_detach_program, SchedClassifier, TcAttachType};
+use aya::{include_bytes_aligned, Bpf};
 use std::{
     convert::TryInto,
-    sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
+    sync::Arc,
     thread,
     time::Duration,
 };
@@ -35,7 +35,14 @@ fn try_main() -> Result<(), anyhow::Error> {
     let mut bpf = Bpf::load(include_bytes_aligned!(
         "../../target/bpfel-unknown-none/release/tcfw"
     ))?;
-    tc::qdisc_add_clsact(&opt.iface)?;
+    if let Err(e) = tc::qdisc_add_clsact(&opt.iface) {
+        eprintln!(
+            "INFO: error attaching clsact to interface {}, possibly already exists \
+		 and safe to ignore: {}. \
+		 \nYou can run 'sudo tc qdisc del dev {} clsact' to clean up and avoid this harmless error.\n",
+            opt.iface, e, opt.iface
+        );
+    }
     let program: &mut SchedClassifier = bpf.program_mut("tcfw").unwrap().try_into()?;
     program.load()?;
     program.attach(&opt.iface, TcAttachType::Ingress)?;
@@ -45,11 +52,19 @@ fn try_main() -> Result<(), anyhow::Error> {
 
     ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
-    }).expect("Error setting Ctrl-C handler");
+    })
+    .expect("Error setting Ctrl-C handler");
 
     println!("Waiting for Ctrl-C...");
     while running.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(500))
+    }
+    println!("Cleaning up...");
+    if let Err(e) = qdisc_detach_program(&opt.iface, TcAttachType::Ingress, "tcfw") {
+        println!(
+            "Error in qdisc_detach_program for interface {}: {}",
+            opt.iface, e
+        );
     }
     println!("Exiting...");
 
